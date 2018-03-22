@@ -39,7 +39,7 @@ find_package( OpenCV REQUIRED )
 include_directories(SYSTEM ${OpenCV_INCLUDE_DIRS})
 message(STATUS "OpenCV found (${OpenCV_CONFIG_PATH})")
 
-add_executable(test-ncs main.cpp)
+add_executable(test-ncs main.cpp ./movidius/fp16.c)
 
 set(CMAKE_EXE_LINKER_FLAGS -Wl,-rpath,/usr/local/lib64)
 

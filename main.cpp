@@ -1,4 +1,5 @@
 #include <mvnc.h>
+#include <./movidius/fp16.h>    // TODO: Make yourr own float2fp16 , fp162float to avoid double licensing
 #include <opencv2/opencv.hpp>
 #include <time.h>
 #include <cstring>
@@ -9,9 +10,11 @@
 #include <sstream>
 #include <memory>
 
-bool prepareTensor(void*& input, std::string& imageName)
+void prepareTensor(void*& input, std::string& imageName)
 {
-  return true;
+  // TODO: load an image using OpenCV
+  // TODO: subtract mean values from image
+  // TODO: convert image data into float16
 }
 
 void loadGraphFromFile(std::unique_ptr<char[]>& graphFile, const std::string& graphFileName, unsigned int* graphSize)
@@ -31,8 +34,11 @@ void loadGraphFromFile(std::unique_ptr<char[]>& graphFile, const std::string& gr
 
   graphFile.reset(new char[*graphSize]);
 
-  // TODO: readfile
+  ifs.read(graphFile.get(),*graphSize);
 
+  // TODO: check if whole file was read
+  
+  ifs.close();
 }
 
 
@@ -41,6 +47,7 @@ int main(int argc, char** argv) {
   void * graphHandle = nullptr;
   const std::string graphFileName("myGoogleNetGraph");
   int exit_code = 0;
+  mvncStatus ret = MVNC_OK;
   try {
     
     if(argc != 2 ) {
@@ -48,11 +55,11 @@ int main(int argc, char** argv) {
                test-ncs <name of image to process> \n \
                 ");
     }
+    std::string imageFileName(argv[1]);
 
     std::vector<std::string> ncs_names;
     char tmpncsname[200]; // How to determine max size automatically
     int index = 0;  // Index of device to query for
-    mvncStatus ret = MVNC_OK;
     while(ret == MVNC_OK) {
       ret = mvncGetDeviceName(index++,tmpncsname,200); // hardcoded max name size 
       if (ret == MVNC_OK) {
@@ -61,7 +68,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    // If not devies present the exit
+    // If not devices present the exit
     if (ncs_names.size() == 0) {
       throw std::string("Error: No Intel Movidius identified in a system!\n");
     }
@@ -86,8 +93,8 @@ int main(int argc, char** argv) {
     }
     
     // Loading tensor, tensor is of a HalfFloat data type 
-
-//    prepareTensor(void*& input, std::string& imageName);
+    std::unique_ptr<char[]> tensor;
+    prepareTensor(static_cast<void*>(tensor.get()), imageFileName);
 //    ret = mvncLoadTensor(graphHandle, input, inputLength, /* user param???*/) 
 //    if (ret != MVNC_OK) {
 //      std::cerr << "Error: Loading Tensor failed!" << std::endl;
@@ -99,9 +106,9 @@ int main(int argc, char** argv) {
   }
 
   // Cleaning up
-//  ret = mvncDeallocateGraph(graphHandle);
-//  if (ret != MVNC_OK) {
- //   std::cerr << "Error: Deallocation of Graph failed!" << std::endl;
- // }
+  ret = mvncDeallocateGraph(graphHandle);
+  if (ret != MVNC_OK) {
+    std::cerr << "Error: Deallocation of Graph failed!" << std::endl;
+  }
   return exit_code;
 }
