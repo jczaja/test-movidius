@@ -10,10 +10,48 @@
 #include <sstream>
 #include <memory>
 
-void prepareTensor(void*& input, std::string& imageName)
+const unsigned int net_data_width = 224;
+const unsigned int net_data_height = 224;
+const unsigned int net_data_channels = 3;
+const cv::Scalar   net_mean(0.40787054*255.0, 0.45752458*255.0, 0.48109378*255.0);
+
+void prepareTensor(void* input, std::string& imageName)
 {
-  // TODO: load an image using OpenCV
-  // TODO: subtract mean values from image
+  // load an image using OpenCV
+  cv::Mat imagefp32 = cv::imread(imageName, -1);
+  if (imagefp32.empty())
+    throw std::string("Error reading image: ") + imageName;
+
+  // Convert to expected format
+  cv::Mat samplefp32;
+  if (imagefp32.channels() == 4 && net_data_channels == 3)
+    cv::cvtColor(imagefp32, samplefp32, cv::COLOR_BGRA2BGR);
+  else if (imagefp32.channels() == 1 && net_data_channels == 3)
+    cv::cvtColor(imagefp32, samplefp32, cv::COLOR_GRAY2BGR);
+  else
+    samplefp32 = imagefp32;
+  
+  // Resize input image to expected geometry
+  cv::Size input_geometry(net_data_width, net_data_height);
+
+  cv::Mat samplefp32_resized;
+  if (samplefp32.size() != input_geometry)
+    cv::resize(samplefp32, samplefp32_resized, input_geometry);
+  else
+    samplefp32_resized = samplefp32;
+
+  // Convert to float32
+  cv::Mat samplefp32_float;
+  samplefp32_resized.convertTo(samplefp32_float, CV_32FC3);
+
+  // Mean subtract
+  cv::Mat sample_fp32_normalized;
+  cv::Mat mean = cv::Mat(input_geometry, CV_32FC3, net_mean);
+  cv::subtract(samplefp32_float, mean, sample_fp32_normalized);
+
+  // Separate channels (caffe format: NCHW)
+  std::vector<cv::Mat> input_channels(net_data_channels);
+  cv::split(sample_fp32_normalized, input_channels);
   // TODO: convert image data into float16
 }
 
