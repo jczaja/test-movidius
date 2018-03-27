@@ -1,5 +1,7 @@
 #include <mvnc.h>
+extern "C" {
 #include <./movidius/fp16.h>    // TODO: Make yourr own float2fp16 , fp162float to avoid double licensing
+}
 #include <opencv2/opencv.hpp>
 #include <time.h>
 #include <cstring>
@@ -15,7 +17,7 @@ const unsigned int net_data_height = 224;
 const unsigned int net_data_channels = 3;
 const cv::Scalar   net_mean(0.40787054*255.0, 0.45752458*255.0, 0.48109378*255.0);
 
-void prepareTensor(void* input, std::string& imageName)
+void prepareTensor(std::unique_ptr<unsigned char[]>& input, std::string& imageName,unsigned int* inputLength)
 {
   // load an image using OpenCV
   cv::Mat imagefp32 = cv::imread(imageName, -1);
@@ -52,8 +54,42 @@ void prepareTensor(void* input, std::string& imageName)
   // Separate channels (caffe format: NCHW)
   std::vector<cv::Mat> input_channels(net_data_channels);
   cv::split(sample_fp32_normalized, input_channels);
-  // TODO: convert image data into float16
+
+  // convert image data into float16
+  input.reset(new unsigned char[sizeof(short)*net_data_width*net_data_height*net_data_channels]);
+  floattofp16(input.get(), reinterpret_cast<float*>(sample_fp32_normalized.data),
+        net_data_width*net_data_height*net_data_channels);
+ 
+  *inputLength = sizeof(short)*net_data_width*net_data_height*net_data_channels;
 }
+
+
+void printPredictions(void* outputTensor,unsigned int outputLength)
+{
+	unsigned int net_output_width = outputLength/sizeof(short);
+
+	std::vector<float> predictions(net_output_width);
+  fp16tofloat(&predictions[0],reinterpret_cast<unsigned char*>(outputTensor),net_output_width);
+	int top1_index= -1;
+	float top1_result = -1.0;
+
+	// find top1 results	
+	for(int i = 0; i<net_output_width;++i) {
+		if(predictions[i] > top1_result) {
+			top1_result = predictions[i];
+			top1_index = i;
+		}
+	}
+
+	// Print top-1 result (class name , prob)
+	std::ifstream synset_words("./synset_words.txt");
+  std::string top1_class;
+	for (int i=0; i<=top1_index; ++i) {
+		std::getline(synset_words,top1_class);	
+	}
+	std::cout << "top-1: " << top1_result << " (" << top1_class << ")" << std::endl;
+}
+
 
 void loadGraphFromFile(std::unique_ptr<char[]>& graphFile, const std::string& graphFileName, unsigned int* graphSize)
 {
@@ -126,20 +162,31 @@ int main(int argc, char** argv) {
 
     ret = mvncAllocateGraph(dev_handle,&graphHandle,static_cast<void*>(graphFile.get()),graphSize);
     if (ret != MVNC_OK) {
-      std::cerr << "Error: Graph allocation on NCS failed!" << std::endl;
-      exit(-1);
+      throw std::string("Error: Graph allocation on NCS failed!");
     }
     
     // Loading tensor, tensor is of a HalfFloat data type 
-    std::unique_ptr<char[]> tensor;
-    prepareTensor(static_cast<void*>(tensor.get()), imageFileName);
-//    ret = mvncLoadTensor(graphHandle, input, inputLength, /* user param???*/) 
-//    if (ret != MVNC_OK) {
-//      std::cerr << "Error: Loading Tensor failed!" << std::endl;
-//    }
+    std::unique_ptr<unsigned char[]> tensor;
+    unsigned int inputLength;
+    prepareTensor(tensor, imageFileName, &inputLength);
+    ret = mvncLoadTensor(graphHandle, tensor.get(), inputLength,
+                         nullptr/* user param*/);  // TODO: What are user params??? 
+    if (ret != MVNC_OK) {
+      throw std::string("Error: Loading Tensor failed!");
+    }
 
+    void* outputTensor;
+    unsigned int outputLength;
+    // This function normally blocks till results are available
+    ret = mvncGetResult(graphHandle,&outputTensor, &outputLength,nullptr);
+    
+    if (ret != MVNC_OK) {
+      throw std::string("Error: Getting results from NCS failed!");
+    }
+    printPredictions(outputTensor, outputLength);
   }
   catch (std::string err) {
+    std::cout << err << std::endl;
     exit_code = -1;
   }
 
@@ -148,5 +195,8 @@ int main(int argc, char** argv) {
   if (ret != MVNC_OK) {
     std::cerr << "Error: Deallocation of Graph failed!" << std::endl;
   }
+
+	// TODO: close Device
+
   return exit_code;
 }
