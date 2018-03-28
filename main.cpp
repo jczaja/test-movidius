@@ -177,8 +177,9 @@ int main(int argc, char** argv) {
 
     void* outputTensor;
     unsigned int outputLength;
+		void* userParam;
     // This function normally blocks till results are available
-    ret = mvncGetResult(graphHandle,&outputTensor, &outputLength,nullptr);
+    ret = mvncGetResult(graphHandle,&outputTensor, &outputLength,&userParam);
     
     if (ret != MVNC_OK) {
       throw std::string("Error: Getting results from NCS failed!");
