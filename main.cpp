@@ -74,7 +74,7 @@ void printPredictions(void* outputTensor,unsigned int outputLength)
 	float top1_result = -1.0;
 
 	// find top1 results	
-	for(int i = 0; i<net_output_width;++i) {
+	for(unsigned int i = 0; i<net_output_width;++i) {
 		if(predictions[i] > top1_result) {
 			top1_result = predictions[i];
 			top1_index = i;
@@ -119,6 +119,8 @@ void loadGraphFromFile(std::unique_ptr<char[]>& graphFile, const std::string& gr
 int main(int argc, char** argv) {
 
   void * graphHandle = nullptr;
+	void* dev_handle = 0;
+	std::vector<std::string> ncs_names;
   const std::string graphFileName("myGoogleNetGraph");
   int exit_code = 0;
   mvncStatus ret = MVNC_OK;
@@ -131,7 +133,6 @@ int main(int argc, char** argv) {
     }
     std::string imageFileName(argv[1]);
 
-    std::vector<std::string> ncs_names;
     char tmpncsname[200]; // How to determine max size automatically
     int index = 0;  // Index of device to query for
     while(ret == MVNC_OK) {
@@ -149,7 +150,6 @@ int main(int argc, char** argv) {
 
     // Using first device
     // TODO: run workload on many devices
-    void* dev_handle = 0;
     ret = mvncOpenDevice(ncs_names[0].c_str(), &dev_handle);
     if(ret != MVNC_OK) {
       throw std::string("Error: Could not open NCS device: ") + ncs_names[0];
@@ -197,7 +197,11 @@ int main(int argc, char** argv) {
     std::cerr << "Error: Deallocation of Graph failed!" << std::endl;
   }
 
-	// TODO: close Device
+	// Close Device
+	ret = mvncCloseDevice(dev_handle);
+  if (ret != MVNC_OK) {
+    std::cerr << "Error: Closing of device: "<< ncs_names[0] <<"failed!" << std::endl;
+  }
 
   return exit_code;
 }
