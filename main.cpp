@@ -133,6 +133,13 @@ int main(int argc, char** argv) {
     }
     std::string imageFileName(argv[1]);
 
+		// Set verbose mode for a work with NCS device
+		int verbosity = 2;	// Be more verbose
+	  ret = mvncSetGlobalOption(0, reinterpret_cast<const void*>(&verbosity),sizeof(int));
+    if(ret != MVNC_OK) {
+      throw std::string("Error: Could not set global option of loggin ") + std::string(" Error code: " + std::to_string(ret));
+    }
+
     char tmpncsname[200]; // How to determine max size automatically
     int index = 0;  // Index of device to query for
     while(ret == MVNC_OK) {
@@ -152,8 +159,9 @@ int main(int argc, char** argv) {
     // TODO: run workload on many devices
     ret = mvncOpenDevice(ncs_names[0].c_str(), &dev_handle);
     if(ret != MVNC_OK) {
-      throw std::string("Error: Could not open NCS device: ") + ncs_names[0];
+      throw std::string("Error: Could not open NCS device: ") + ncs_names[0] ;
     }
+
 
     // Allocate graph
     unsigned int graphSize = 0;
