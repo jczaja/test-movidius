@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
   void * graphHandle = nullptr;
 	void* dev_handle = 0;
 	std::vector<std::string> ncs_names;
-  const std::string graphFileName("myGoogleNet-shave24");
+  const std::string graphFileName("myGoogleNet-shave12");
   int exit_code = 0;
   mvncStatus ret = MVNC_OK;
   try {
