@@ -17,6 +17,9 @@ const unsigned int net_data_height = 224;
 const unsigned int net_data_channels = 3;
 const cv::Scalar   net_mean(0.40787054*255.0, 0.45752458*255.0, 0.48109378*255.0);
 
+// TODO:
+// - user params
+
 void prepareTensor(std::unique_ptr<unsigned char[]>& input, std::string& imageName,unsigned int* inputLength)
 {
   // load an image using OpenCV
@@ -115,13 +118,23 @@ void loadGraphFromFile(std::unique_ptr<char[]>& graphFile, const std::string& gr
   ifs.close();
 }
 
+void printProfiling(float* dataPtr, unsigned int numEntries)
+{
+	std::cout << "Performance profiling:" << std::endl;
+	float totalTime = 0.0f;
+	for(int i=0; i<numEntries; ++i) {
+		std::cout << "	" << std::to_string(dataPtr[i]) << " ms"<<std::endl; 			
+		totalTime += dataPtr[i];
+	}
+	std::cout << "Total time: " << std::to_string(totalTime) << " ms"<< std::endl; 			
+}
 
 int main(int argc, char** argv) {
 
   void * graphHandle = nullptr;
 	void* dev_handle = 0;
 	std::vector<std::string> ncs_names;
-  const std::string graphFileName("myGoogleNetGraph");
+  const std::string graphFileName("myGoogleNet-shave24");
   int exit_code = 0;
   mvncStatus ret = MVNC_OK;
   try {
@@ -193,6 +206,18 @@ int main(int argc, char** argv) {
       throw std::string("Error: Getting results from NCS failed!");
     }
     printPredictions(outputTensor, outputLength);
+
+		// print some performance info
+		unsigned int dataLength = 0;
+		float * data_ptr = nullptr;
+		ret = mvncGetGraphOption(graphHandle,MVNC_TIME_TAKEN,reinterpret_cast<void**>(&data_ptr),&dataLength);
+    if (ret != MVNC_OK) {
+      throw std::string("Error: Getting Time taken results failed!");
+    }
+
+		// implement printing of profiling info
+		printProfiling(data_ptr, dataLength/sizeof(float));
+		
   }
   catch (std::string err) {
     std::cout << err << std::endl;
