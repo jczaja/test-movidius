@@ -14,6 +14,13 @@ add_definitions(-std=c++0x)
 endif()
 endif()
 
+
+# GFLAGS
+find_library(GFLAGS_LIB NAMES gflags)
+find_path(GFLAGS_INCLUDES NAMES gflags.h PATHS /usr/include/gflags/)
+message("GFLAGS INCLUDES: ${GFLAGS_INCLUDES}")
+include_directories(SYSTEM ${GFLAGS_INCLUDES})
+
 # ---[ Find include dir
 find_path(NCS_INCLUDE_DIR NAMES "mvnc.h" HINTS "/usr/local" PATHS "/usr/local" PATH_SUFFIXES "include" )
 
@@ -46,4 +53,4 @@ set(CMAKE_EXE_LINKER_FLAGS -Wl,-rpath,/usr/local/lib64)
 
 add_definitions(-Wall)
 
-target_link_libraries(test-ncs ${NCS_LIBRARY} ${OpenCV_LIBS})
+target_link_libraries(test-ncs ${NCS_LIBRARY} ${OpenCV_LIBS} ${GFLAGS_LIB})

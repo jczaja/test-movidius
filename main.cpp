@@ -11,12 +11,141 @@ extern "C" {
 #include <streambuf>
 #include <sstream>
 #include <memory>
+#include <x86intrin.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include "gflags/gflags.h"
+
+DEFINE_int32(num_reps, 1,
+    "Number of repetitions of convolutions to be performed");
 
 const unsigned int net_data_width = 224;
 const unsigned int net_data_height = 224;
 const unsigned int net_data_channels = 3;
 const cv::Scalar   net_mean(0.40787054*255.0, 0.45752458*255.0, 0.48109378*255.0);
 
+struct platform_info
+{
+    long num_logical_processors;
+    long num_physical_processors_per_socket;
+    long num_hw_threads_per_socket;
+    unsigned int num_ht_threads; 
+    unsigned int num_total_phys_cores;
+    unsigned long long tsc;
+    unsigned long long max_bandwidth; 
+};
+
+class nn_hardware_platform
+{
+    public:
+        nn_hardware_platform() : m_num_logical_processors(0), m_num_physical_processors_per_socket(0), m_num_hw_threads_per_socket(0) ,m_num_ht_threads(1), m_num_total_phys_cores(1), m_tsc(0), m_fmaspc(0), m_max_bandwidth(0)
+        {
+#ifdef __linux__
+            m_num_logical_processors = sysconf(_SC_NPROCESSORS_ONLN);
+        
+            m_num_physical_processors_per_socket = 0;
+
+            std::ifstream ifs;
+            ifs.open("/proc/cpuinfo"); 
+
+            // If there is no /proc/cpuinfo fallback to default scheduler
+            if(ifs.good() == false) {
+                m_num_physical_processors_per_socket = m_num_logical_processors;
+                assert(0);  // No cpuinfo? investigate that
+                return;   
+            }
+            std::string cpuinfo_content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+            std::stringstream cpuinfo_stream(cpuinfo_content);
+            std::string cpuinfo_line;
+            std::string cpu_name;
+            while(std::getline(cpuinfo_stream,cpuinfo_line,'\n')){
+                if((m_num_physical_processors_per_socket == 0) && (cpuinfo_line.find("cpu cores") != std::string::npos)) {
+                    // convert std::string into number eg. skip colon and after it in the same line  should be number of physical cores per socket
+                    std::stringstream( cpuinfo_line.substr(cpuinfo_line.find(":") + 1) ) >> m_num_physical_processors_per_socket; 
+                }
+                if(cpuinfo_line.find("siblings") != std::string::npos) {
+                    // convert std::string into number eg. skip colon and after it in the same line  should be number of HW threads per socket
+                    std::stringstream( cpuinfo_line.substr(cpuinfo_line.find(":") + 1) ) >> m_num_hw_threads_per_socket; 
+                }
+
+                if(cpuinfo_line.find("model") != std::string::npos) {
+                    cpu_name = cpuinfo_line;
+                    // convert std::string into number eg. skip colon and after it in the same line  should be number of HW threads per socket
+                    float ghz_tsc = 0.0f;
+                    std::stringstream( cpuinfo_line.substr(cpuinfo_line.find("@") + 1) ) >> ghz_tsc; 
+                    m_tsc = static_cast<unsigned long long>(ghz_tsc*1000000000.0f);
+                    
+                    // Maximal bandwidth is Xeon 68GB/s , Brix 25.8GB/s
+                    if(cpuinfo_line.find("Xeon") != std::string::npos) {
+                      m_max_bandwidth = 68000;  //68 GB/s      -- XEONE5
+                    } 
+                    
+                    if(cpuinfo_line.find("i7-4770R") != std::string::npos) {
+                      m_max_bandwidth = 25800;  //25.68 GB/s      -- BRIX
+                    } 
+                }
+                
+                // determine instruction set (AVX, AVX2, AVX512)
+                if(m_fmaspc == 0) {
+                    if (cpuinfo_line.find(" avx") != std::string::npos) {
+                      m_fmaspc = 8;   // On AVX instruction set we have one FMA unit , width of registers is 256bits, so we can do 8 muls and adds on floats per cycle
+                      if (cpuinfo_line.find(" avx2") != std::string::npos) {
+                        m_fmaspc = 16;   // With AVX2 instruction set we have two FMA unit , width of registers is 256bits, so we can do 16 muls and adds on floats per cycle
+                      }
+                      if (cpuinfo_line.find(" avx512") != std::string::npos) {
+                        m_fmaspc = 32;   // With AVX512 instruction set we have two FMA unit , width of registers is 512bits, so we can do 32 muls and adds on floats per cycle
+                      }
+                  }
+                }
+            }
+            // If no FMA ops / cycle was given/found then raise a concern
+            if(m_fmaspc == 0) {
+              throw std::string("No AVX instruction set found. Please use \"--fmaspc\" to specify\n");
+            }
+
+            // There is cpuinfo, but parsing did not get quite right? Investigate it
+            assert( m_num_physical_processors_per_socket > 0);
+            assert( m_num_hw_threads_per_socket > 0);
+
+            // Calculate how many threads can be run on single cpu core , in case of lack of hw info attributes assume 1
+            m_num_ht_threads =  m_num_physical_processors_per_socket != 0 ? m_num_hw_threads_per_socket/ m_num_physical_processors_per_socket : 1;
+            // calculate total number of physical cores eg. how many full Hw threads we can run in parallel
+            m_num_total_phys_cores = m_num_hw_threads_per_socket != 0 ? m_num_logical_processors / m_num_hw_threads_per_socket * m_num_physical_processors_per_socket : 1;
+
+            std::cout << "Platform:" << std::endl << "  " << cpu_name << std::endl 
+                      << "  number of physical cores: " << m_num_total_phys_cores << std::endl; 
+            ifs.close(); 
+
+#endif
+        }
+    // Function computing percentage of theretical efficiency of HW capabilities
+    float compute_theoretical_efficiency(unsigned long long start_time, unsigned long long end_time, unsigned long long num_fmas)
+    {
+      // Num theoretical operations
+      // Time given is there
+      return 100.0*num_fmas/((float)(m_num_total_phys_cores*m_fmaspc))/((float)(end_time - start_time));
+    }
+
+    void get_platform_info(platform_info& pi)
+    {
+       pi.num_logical_processors = m_num_logical_processors; 
+       pi.num_physical_processors_per_socket = m_num_physical_processors_per_socket; 
+       pi.num_hw_threads_per_socket = m_num_hw_threads_per_socket;
+       pi.num_ht_threads = m_num_ht_threads;
+       pi.num_total_phys_cores = m_num_total_phys_cores;
+       pi.tsc = m_tsc;
+       pi.max_bandwidth = m_max_bandwidth;
+    }
+    private:
+        long m_num_logical_processors;
+        long m_num_physical_processors_per_socket;
+        long m_num_hw_threads_per_socket;
+        unsigned int m_num_ht_threads;
+        unsigned int m_num_total_phys_cores;
+        unsigned long long m_tsc;
+        short int m_fmaspc;
+        unsigned long long m_max_bandwidth;
+};
 // TODO:
 // - user params
 
@@ -82,6 +211,7 @@ void printPredictions(void* outputTensor,unsigned int outputLength)
 			top1_result = predictions[i];
 			top1_index = i;
 		}
+		std::cout << predictions[i] << std::endl;
 	}
 
 	// Print top-1 result (class name , prob)
@@ -131,10 +261,20 @@ void printProfiling(float* dataPtr, unsigned int numEntries)
 
 int main(int argc, char** argv) {
 
+#ifndef GFLAGS_GFLAGS_H_
+  namespace gflags = google;
+#endif
+  gflags::SetUsageMessage("Perform NCS classification.\n"
+        "Usage:\n"
+        "    test_ncs [FLAGS]\n");
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   void * graphHandle = nullptr;
 	void* dev_handle = 0;
 	std::vector<std::string> ncs_names;
   const std::string graphFileName("myGoogleNet-shave12");
+  nn_hardware_platform machine;
+  platform_info pi;
+  machine.get_platform_info(pi);
   int exit_code = 0;
   mvncStatus ret = MVNC_OK;
   try {
@@ -186,21 +326,36 @@ int main(int argc, char** argv) {
       throw std::string("Error: Graph allocation on NCS failed!");
     }
     
+
+    int dontBlockValue = 0;
+    ret = mvncSetGraphOption(graphHandle,
+        MVNC_DONTBLOCK, &dontBlockValue, sizeof(int));
+    if (ret != MVNC_OK)
+    {
+      throw std::string("Error: Setting MVNC_DONTBLOCK graph option failed!");
+    }
+
     // Loading tensor, tensor is of a HalfFloat data type 
     std::unique_ptr<unsigned char[]> tensor;
     unsigned int inputLength;
     prepareTensor(tensor, imageFileName, &inputLength);
+    auto t1 = __rdtsc();
+    void* outputTensor;
+    unsigned int outputLength;
+    for(int i=0; i< FLAGS_num_reps; ++i) {
     ret = mvncLoadTensor(graphHandle, tensor.get(), inputLength,
                          nullptr/* user param*/);  // TODO: What are user params??? 
     if (ret != MVNC_OK) {
       throw std::string("Error: Loading Tensor failed!");
     }
 
-    void* outputTensor;
-    unsigned int outputLength;
 		void* userParam;
     // This function normally blocks till results are available
     ret = mvncGetResult(graphHandle,&outputTensor, &outputLength,&userParam);
+		}
+    auto t2 = __rdtsc();
+
+    std::cout << "---> NCS execution including memory transfer takes " << ((t2 - t1)/(float)FLAGS_num_reps) << " RDTSC cycles time[ms]: " << (t2 -t1)*1000.0f/((float)pi.tsc*FLAGS_num_reps);
     
     if (ret != MVNC_OK) {
       throw std::string("Error: Getting results from NCS failed!");
@@ -231,10 +386,12 @@ int main(int argc, char** argv) {
   }
 
 	// Close Device
-	ret = mvncCloseDevice(dev_handle);
-  if (ret != MVNC_OK) {
-    std::cerr << "Error: Closing of device: "<< ncs_names[0] <<"failed!" << std::endl;
-  }
+	if (dev_handle != 0) {
+		ret = mvncCloseDevice(dev_handle);
+		if (ret != MVNC_OK) {
+			std::cerr << "Error: Closing of device: "<< ncs_names[0] <<"failed!" << std::endl;
+		}
+	}
 
   return exit_code;
 }
